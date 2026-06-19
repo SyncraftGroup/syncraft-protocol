@@ -1,0 +1,13 @@
+[package]
+name = "syncraft_protocol"
+version = "0.1.0"
+description = "The protocol lib for syncraft."
+edition = "2024"
+authors = ["Falsw <Falsestar114514@outlook.com>"]
+license = "MIT"
+
+[dependencies]
+hex = "0.4.3"
+serde = { version = "1.0.228", features = ["derive"] }
+sha1 = "0.11.0"
+tokio = { version = "1.52.3", features = ["fs"] }
