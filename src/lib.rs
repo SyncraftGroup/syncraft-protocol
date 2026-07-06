@@ -1,38 +1,7 @@
-use std::{io, path::PathBuf};
-
-use sha1::{Digest, Sha1};
+use std::{io, path::Path, time::SystemTime};
 
 use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct ResolvedFile {
-    pub url: Option<Vec<String>>,
-    pub path: PathBuf,
-    pub sha1: Option<String>,
-    pub size: Option<usize>,
-}
-
-pub fn sha1_bytes(bytes: &[u8]) -> String {
-    let mut hasher = Sha1::new();
-    hasher.update(bytes);
-    let digest = hasher.finalize();
-    hex::encode(digest)
-}
-
-impl ResolvedFile {
-    pub async fn verified(&self) -> Result<bool, io::Error> {
-        if self.path.exists() {
-            if let Some(expected) = &self.sha1 {
-                Ok(expected.eq_ignore_ascii_case(&self.sha1().await?))
-            } else { Ok(true) }
-        } else { Ok(false) }
-    }
-
-    pub async fn sha1(&self) -> Result<String, io::Error> {
-        let bytes = tokio::fs::read(&self.path).await?;
-        Ok(sha1_bytes(&bytes))
-    }
-}
+use tokio::{fs::{self, File}, io::AsyncReadExt};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum Loader {
@@ -47,4 +16,43 @@ pub struct VersionInfo {
     pub name: String,
     pub vanilla_version: String,
     pub loader: Loader
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct FileState {
+    pub size: u64,
+    pub hash: blake3::Hash,
+    pub modified: SystemTime
+}
+
+impl FileState {
+    pub async fn from_path(path: &Path) -> io::Result<Self> {
+        
+        let metadata = fs::metadata(path).await?;
+
+        Ok(Self {
+            hash: Self::hash(path).await?,
+            size: metadata.len(),
+            modified: metadata.modified()?
+        })
+    }
+
+    pub async fn hash(path: &Path) -> io::Result<blake3::Hash> {
+
+        let mut file = File::open(path).await?;
+        let mut hasher = blake3::Hasher::new();
+        let mut buf = [0u8; 8192];
+
+        loop {
+            let n = file.read(&mut buf).await?;
+            if n == 0 { break; }
+            hasher.update(&buf[..n]);
+        }
+
+        Ok(hasher.finalize())
+    }
+
+    pub async fn matches(&self, path: &Path) -> io::Result<bool> {
+        Ok(self.hash == Self::hash(path).await?)
+    }
 }

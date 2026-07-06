@@ -7,7 +7,7 @@ authors = ["Falsw <Falsestar114514@outlook.com>"]
 license = "MIT"
 
 [dependencies]
+blake3 = { version = "1.8.5", features = ["serde"] }
 hex = "0.4.3"
 serde = { version = "1.0.228", features = ["derive"] }
-sha1 = "0.11.0"
-tokio = { version = "1.52.3", features = ["fs"] }
+tokio = { version = "1.52.3", features = ["fs", "io-util"] }
