@@ -162,6 +162,68 @@ impl SyncMode {
     }
 }
 
+/// Theme package advertised by the server.
+///
+/// The client downloads `GET /theme/{hash}`, caches the zip under this hash,
+/// and reads its `theme.json` descriptor.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ThemeInfo {
+    /// blake3 of the theme zip; also the cache key.
+    pub hash: String,
+    /// Display name from the theme descriptor.
+    pub name: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+pub struct ThemeDescriptor {
+    #[serde(default)]
+    pub name: Option<String>,
+    /// CSS custom properties, without the leading `--`.
+    #[serde(default)]
+    pub colors: BTreeMap<String, String>,
+    /// Font faces shipped inside the package.
+    #[serde(default)]
+    pub fonts: Vec<ThemeFont>,
+    /// Optional homepage document, relative to the package root.
+    /// CSS and images referenced by it are resolved inside the package.
+    #[serde(default)]
+    pub home: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ThemeFont {
+    pub family: String,
+    /// Path relative to the package root.
+    pub file: String,
+    /// One of `ui`, `display`, `data`. Defaults to `ui`.
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_weight")]
+    pub weight: Option<String>,
+    #[serde(default)]
+    pub style: Option<String>,
+}
+
+/// Font weights are commonly written as numbers; accept both `400` and `"400"`.
+fn deserialize_weight<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Weight {
+        Text(String),
+        Number(i64),
+    }
+
+    Ok(
+        Option::<Weight>::deserialize(deserializer)?.map(|weight| match weight {
+            Weight::Text(text) => text,
+            Weight::Number(number) => number.to_string(),
+        }),
+    )
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SyncFile {
     pub state: Option<FileState>,
@@ -184,6 +246,9 @@ pub struct Manifest {
     /// Optional detached signature, see [`ManifestSignature`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signature: Option<ManifestSignature>,
+    /// Optional client theme package.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeInfo>,
     /// Sorted map: iteration order (and therefore the content hash) is stable.
     pub files: BTreeMap<PathBuf, SyncFile>,
 }
@@ -198,6 +263,7 @@ impl Manifest {
         schema: u32,
         version: &VersionInfo,
         files: &BTreeMap<PathBuf, SyncFile>,
+        theme: Option<&ThemeInfo>,
     ) -> String {
         let mut hasher = blake3::Hasher::new();
         hasher.update(b"syncraft-manifest\0");
@@ -240,6 +306,18 @@ impl Manifest {
                 None => {
                     hasher.update(&[0]);
                 }
+            }
+        }
+
+        match theme {
+            Some(theme) => {
+                hasher.update(b"\0theme\0");
+                hasher.update(theme.hash.as_bytes());
+                hasher.update(&[0]);
+                hasher.update(theme.name.as_bytes());
+            }
+            None => {
+                hasher.update(b"\0theme-none");
             }
         }
 
@@ -289,8 +367,8 @@ mod tests {
         let a = files("mods/a.jar");
 
         assert_eq!(
-            Manifest::content_hash(MANIFEST_SCHEMA, &version, &a),
-            Manifest::content_hash(MANIFEST_SCHEMA, &version, &a)
+            Manifest::content_hash(MANIFEST_SCHEMA, &version, &a, None),
+            Manifest::content_hash(MANIFEST_SCHEMA, &version, &a, None)
         );
     }
 
@@ -300,18 +378,33 @@ mod tests {
         let a = files("mods/a.jar");
         let b = files("mods/b.jar");
 
-        let base = Manifest::content_hash(MANIFEST_SCHEMA, &version, &a);
-        assert_ne!(base, Manifest::content_hash(MANIFEST_SCHEMA, &version, &b));
+        let base = Manifest::content_hash(MANIFEST_SCHEMA, &version, &a, None);
         assert_ne!(
             base,
-            Manifest::content_hash(MANIFEST_SCHEMA + 1, &version, &a)
+            Manifest::content_hash(MANIFEST_SCHEMA, &version, &b, None)
+        );
+        assert_ne!(
+            base,
+            Manifest::content_hash(MANIFEST_SCHEMA + 1, &version, &a, None)
         );
 
         let mut other = version.clone();
         other.loader = Loader::Forge {
             loader_version: "47.2.0".into(),
         };
-        assert_ne!(base, Manifest::content_hash(MANIFEST_SCHEMA, &other, &a));
+        assert_ne!(
+            base,
+            Manifest::content_hash(MANIFEST_SCHEMA, &other, &a, None)
+        );
+
+        let theme = ThemeInfo {
+            hash: "a".repeat(64),
+            name: "Theme".into(),
+        };
+        assert_ne!(
+            base,
+            Manifest::content_hash(MANIFEST_SCHEMA, &version, &a, Some(&theme))
+        );
     }
 
     #[test]
